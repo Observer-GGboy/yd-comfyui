@@ -6,6 +6,8 @@ __pycache__/
 /models/
 /temp/
 /custom_nodes/
+!/custom_nodes/DirectorMV_Nodes/
+!/custom_nodes/DirectorMV_Nodes/**
 !custom_nodes/example_node.py.example
 extra_model_paths.yaml
 /.vs
@@ -25,3 +27,5 @@ openapi.yaml
 filtered-openapi.yaml
 uv.lock
 /client/
+__pycache__/
+*.pyc

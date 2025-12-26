@@ -1,0 +1,36 @@
+{
+  "name": "DirectorMV v0 Baseline (Kling Nodes)",
+  "description": "Baseline workflow using third-party Kling nodes directly. For comparison only.",
+  "version": "0.1.0",
+  "notice": "This workflow uses Kling nodes directly. Use v0_dmv_main.json for production.",
+  "nodes": {
+    "description": "Baseline workflow for A/B comparison with DMV unified nodes.",
+    "flow": [
+      {
+        "step": 1,
+        "node": "LoadImage",
+        "description": "Load reference character image"
+      },
+      {
+        "step": 2,
+        "node": "KlingImage2VideoNode (third-party)",
+        "description": "Direct Kling I2V API call"
+      },
+      {
+        "step": 3,
+        "node": "KlingLipSyncAudioToVideoNode (third-party)",
+        "description": "Direct Kling Lip Sync API call"
+      },
+      {
+        "step": 4,
+        "node": "SaveVideo",
+        "description": "Save output"
+      }
+    ]
+  },
+  "required_nodes": [
+    "comfy_api_nodes (Kling)"
+  ],
+  "notes": "This baseline workflow is for comparison testing only. Production workflows should use DMV_API_* nodes."
+}
+

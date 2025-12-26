@@ -1,0 +1,265 @@
+{
+  "last_node_id": 12,
+  "last_link_id": 15,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadImage",
+      "pos": [50, 100],
+      "size": {"0": 315, "1": 314},
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "links": [1, 2], "slot_index": 0},
+        {"name": "MASK", "type": "MASK", "links": null}
+      ],
+      "properties": {"Node name for S&R": "LoadImage"},
+      "widgets_values": ["character_reference.png", "image"]
+    },
+    {
+      "id": 2,
+      "type": "DMV_IdentityExtractor",
+      "pos": [400, 100],
+      "size": {"0": 280, "1": 100},
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {"name": "image", "type": "IMAGE", "link": 1}
+      ],
+      "outputs": [
+        {"name": "embedding", "type": "IDENTITY_EMBEDDING", "links": [3], "slot_index": 0},
+        {"name": "confidence", "type": "FLOAT", "links": null},
+        {"name": "face_crop", "type": "IMAGE", "links": null}
+      ],
+      "properties": {"Node name for S&R": "DMV_IdentityExtractor"},
+      "widgets_values": [0.5]
+    },
+    {
+      "id": 3,
+      "type": "DMV_IdentityCache",
+      "pos": [720, 100],
+      "size": {"0": 280, "1": 100},
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {"name": "embedding", "type": "IDENTITY_EMBEDDING", "link": 3}
+      ],
+      "outputs": [
+        {"name": "embedding", "type": "IDENTITY_EMBEDDING", "links": [4], "slot_index": 0},
+        {"name": "cache_hit", "type": "BOOLEAN", "links": null},
+        {"name": "status", "type": "STRING", "links": null}
+      ],
+      "properties": {"Node name for S&R": "DMV_IdentityCache"},
+      "widgets_values": ["character_A", "store_or_retrieve"]
+    },
+    {
+      "id": 4,
+      "type": "DMV_API_Image2Video",
+      "pos": [400, 350],
+      "size": {"0": 350, "1": 250},
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {"name": "image", "type": "IMAGE", "link": 2}
+      ],
+      "outputs": [
+        {"name": "video_path", "type": "STRING", "links": [5], "slot_index": 0},
+        {"name": "task_id", "type": "STRING", "links": [6], "slot_index": 1},
+        {"name": "cost_usd", "type": "FLOAT", "links": [7], "slot_index": 2},
+        {"name": "status", "type": "STRING", "links": [8], "slot_index": 3},
+        {"name": "success", "type": "BOOLEAN", "links": [9], "slot_index": 4}
+      ],
+      "properties": {"Node name for S&R": "DMV_API_Image2Video"},
+      "widgets_values": [
+        "A person looking at camera, natural expression, slight movement",
+        "auto",
+        "5",
+        "blurry, distorted face, bad anatomy, deformed",
+        0.7,
+        -1,
+        true,
+        ""
+      ]
+    },
+    {
+      "id": 5,
+      "type": "Note",
+      "pos": [50, 350],
+      "size": {"0": 300, "1": 180},
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "properties": {"text": ""},
+      "widgets_values": ["DirectorMV v0 Main Workflow\n\nThis workflow uses ONLY DMV nodes.\nNo direct third-party API nodes (Kling, etc.)\n\nDMV_API_Image2Video:\n- provider=auto: selects best provider\n- Records task_id, cost, duration\n- Supports fallback on failure\n\nOutput: video_path (string)"]
+    },
+    {
+      "id": 6,
+      "type": "LoadAudio",
+      "pos": [50, 600],
+      "size": {"0": 300, "1": 100},
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "outputs": [
+        {"name": "AUDIO", "type": "AUDIO", "links": null}
+      ],
+      "properties": {"Node name for S&R": "LoadAudio"},
+      "widgets_values": ["speech.mp3"]
+    },
+    {
+      "id": 7,
+      "type": "DMV_API_LipSync",
+      "pos": [800, 350],
+      "size": {"0": 350, "1": 220},
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {"name": "video_path", "type": "STRING", "link": 5}
+      ],
+      "outputs": [
+        {"name": "video_path", "type": "STRING", "links": [10], "slot_index": 0},
+        {"name": "task_id", "type": "STRING", "links": [11], "slot_index": 1},
+        {"name": "cost_usd", "type": "FLOAT", "links": [12], "slot_index": 2},
+        {"name": "status", "type": "STRING", "links": [13], "slot_index": 3},
+        {"name": "success", "type": "BOOLEAN", "links": [14], "slot_index": 4}
+      ],
+      "properties": {"Node name for S&R": "DMV_API_LipSync"},
+      "widgets_values": [
+        "audio",
+        "auto",
+        "path/to/audio.mp3",
+        "",
+        "Melody",
+        "en",
+        true,
+        ""
+      ]
+    },
+    {
+      "id": 8,
+      "type": "DMV_TaskTracker",
+      "pos": [1200, 100],
+      "size": {"0": 300, "1": 120},
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "outputs": [
+        {"name": "result", "type": "STRING", "links": [15], "slot_index": 0}
+      ],
+      "properties": {"Node name for S&R": "DMV_TaskTracker"},
+      "widgets_values": ["get_summary", "", 10]
+    },
+    {
+      "id": 9,
+      "type": "ShowText|pysssss",
+      "pos": [1200, 280],
+      "size": {"0": 350, "1": 200},
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {"name": "text", "type": "STRING", "link": 8}
+      ],
+      "outputs": [
+        {"name": "STRING", "type": "STRING", "links": null}
+      ],
+      "properties": {"Node name for S&R": "ShowText|pysssss"},
+      "widgets_values": ["Image2Video status"]
+    },
+    {
+      "id": 10,
+      "type": "ShowText|pysssss",
+      "pos": [1200, 520],
+      "size": {"0": 350, "1": 150},
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {"name": "text", "type": "STRING", "link": 13}
+      ],
+      "outputs": [
+        {"name": "STRING", "type": "STRING", "links": null}
+      ],
+      "properties": {"Node name for S&R": "ShowText|pysssss"},
+      "widgets_values": ["LipSync status"]
+    },
+    {
+      "id": 11,
+      "type": "ShowText|pysssss",
+      "pos": [1550, 100],
+      "size": {"0": 350, "1": 200},
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {"name": "text", "type": "STRING", "link": 15}
+      ],
+      "outputs": [
+        {"name": "STRING", "type": "STRING", "links": null}
+      ],
+      "properties": {"Node name for S&R": "ShowText|pysssss"},
+      "widgets_values": ["Session task summary"]
+    },
+    {
+      "id": 12,
+      "type": "ShowText|pysssss",
+      "pos": [1200, 700],
+      "size": {"0": 350, "1": 100},
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {"name": "text", "type": "STRING", "link": 10}
+      ],
+      "outputs": [
+        {"name": "STRING", "type": "STRING", "links": null}
+      ],
+      "properties": {"Node name for S&R": "ShowText|pysssss"},
+      "widgets_values": ["Final video path"]
+    }
+  ],
+  "links": [
+    [1, 1, 0, 2, 0, "IMAGE"],
+    [2, 1, 0, 4, 0, "IMAGE"],
+    [3, 2, 0, 3, 0, "IDENTITY_EMBEDDING"],
+    [5, 4, 0, 7, 0, "STRING"],
+    [8, 4, 3, 9, 0, "STRING"],
+    [10, 7, 0, 12, 0, "STRING"],
+    [13, 7, 3, 10, 0, "STRING"],
+    [15, 8, 0, 11, 0, "STRING"]
+  ],
+  "groups": [
+    {
+      "title": "Identity Extraction",
+      "bounding": [40, 40, 1000, 250],
+      "color": "#3f789e"
+    },
+    {
+      "title": "Video Generation (DMV_API_*)",
+      "bounding": [380, 300, 800, 280],
+      "color": "#8A8"
+    },
+    {
+      "title": "Task Tracking & Output",
+      "bounding": [1180, 50, 750, 800],
+      "color": "#88A"
+    }
+  ],
+  "config": {},
+  "extra": {
+    "ds": {"scale": 0.9, "offset": [0, 0]},
+    "info": {
+      "name": "DirectorMV v0 Main - DMV Nodes Only",
+      "description": "Production workflow using only DMV unified API nodes. No direct third-party nodes.",
+      "version": "0.1.0",
+      "author": "DirectorMV"
+    }
+  },
+  "version": 0.4
+}
+

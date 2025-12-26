@@ -1,0 +1,156 @@
+{
+  "name": "DirectorMV v1 - Draft to Production Workflow",
+  "description": "Two-phase workflow: Draft (free local) → Production (commercial API). Use draft for iteration, switch to production for final output.",
+  "version": "1.0.0",
+  "workflow_type": "draft_to_production",
+  
+  "design_principles": {
+    "draft_first": "Start with local_turbodiffusion for cost-free iteration",
+    "explicit_switch": "User must manually switch to production provider",
+    "no_accidental_charges": "Draft failure does NOT auto-fallback to commercial API"
+  },
+  
+  "phases": {
+    "phase_1_draft": {
+      "name": "Draft Phase - Free Iteration",
+      "description": "Use local GPU for rapid iteration. Validate shot, motion, timing.",
+      "cost": "$0.00",
+      "settings": {
+        "provider": "local_turbodiffusion",
+        "model": "auto",
+        "duration": "5",
+        "resolution": "720p",
+        "run_mode": "prod_full",
+        "enable_fallback": true
+      },
+      "expected_output": {
+        "quality": "Draft/Preview",
+        "use_for": ["Shot composition check", "Motion direction validation", "Timing/rhythm preview"]
+      }
+    },
+    "phase_2_production": {
+      "name": "Production Phase - Final Output",
+      "description": "Switch to commercial API when draft is satisfactory.",
+      "cost": "$0.14-$1.40",
+      "settings": {
+        "provider": "kling",
+        "model": "kling-v1-5",
+        "mode": "pro",
+        "duration": "5",
+        "resolution": "1080p",
+        "run_mode": "prod_full",
+        "enable_fallback": false
+      },
+      "expected_output": {
+        "quality": "Production/Deliverable",
+        "use_for": ["Final render", "Client delivery", "Publication"]
+      }
+    }
+  },
+  
+  "nodes": {
+    "description": "Workflow template for ComfyUI. Adjust provider parameter to switch phases.",
+    "flow": [
+      {
+        "step": 1,
+        "node": "LoadImage",
+        "description": "Load first frame / reference image"
+      },
+      {
+        "step": 2,
+        "node": "DMV_API_Image2Video",
+        "description": "Generate video - switch provider between draft/production",
+        "parameters": {
+          "image": "FROM:LoadImage",
+          "prompt": "A person looking at camera with natural expression, gentle movement",
+          "provider": "local_turbodiffusion",
+          "model": "auto",
+          "duration": "5",
+          "resolution": "720p",
+          "mode": "std",
+          "negative_prompt": "blurry, distorted face, bad anatomy, deformed",
+          "cfg_scale": 0.7,
+          "seed": -1,
+          "run_mode": "prod_full",
+          "enable_fallback": true,
+          "return_debug": true
+        },
+        "phase_switch_note": "Change 'provider' to 'kling' for production"
+      },
+      {
+        "step": 3,
+        "node": "SaveVideo",
+        "description": "Save output video",
+        "output_naming": {
+          "draft": "draft_{task_id}_{timestamp}.mp4",
+          "production": "{provider}_{task_id}_{timestamp}.mp4"
+        }
+      }
+    ]
+  },
+  
+  "example_draft_session": {
+    "description": "Example of iterative draft workflow",
+    "iterations": [
+      {
+        "iteration": 1,
+        "prompt": "Person walking forward",
+        "result": "Motion too fast",
+        "cost": "$0.00"
+      },
+      {
+        "iteration": 2,
+        "prompt": "Person walking forward slowly, relaxed pace",
+        "result": "Better, but angle wrong",
+        "cost": "$0.00"
+      },
+      {
+        "iteration": 3,
+        "prompt": "Person walking forward slowly, camera follows from side",
+        "result": "Good! Ready for production",
+        "cost": "$0.00"
+      }
+    ],
+    "total_draft_cost": "$0.00",
+    "production_render": {
+      "provider": "kling",
+      "model": "kling-v1-5",
+      "mode": "pro",
+      "cost": "$0.28"
+    },
+    "total_session_cost": "$0.28"
+  },
+  
+  "test_connect_example": {
+    "description": "Verify draft environment before starting",
+    "settings": {
+      "provider": "local_turbodiffusion",
+      "run_mode": "test_connect"
+    },
+    "expected_output": "TEST_CONNECT_OK | local_turbodiffusion ready | GPU: NVIDIA RTX 5090 | VRAM: 28.5/32.0GB"
+  },
+  
+  "required_nodes": [
+    "DirectorMV_Nodes"
+  ],
+  
+  "hardware_requirements": {
+    "draft_phase": {
+      "gpu": "NVIDIA RTX 4090/5090 or similar",
+      "vram": "16-24 GB",
+      "note": "local_turbodiffusion requires minimum 16GB VRAM"
+    },
+    "production_phase": {
+      "gpu": "Not required (cloud API)",
+      "api_key": "KLING_API_KEY / MINIMAX_API_KEY / etc."
+    }
+  },
+  
+  "acceptance_criteria": {
+    "draft_iteration_time": "< 30s per draft",
+    "draft_cost": "$0.00",
+    "production_quality": "Commercial deliverable",
+    "identity_preservation": "ArcFace >= 0.6 (if applicable)"
+  }
+}
+

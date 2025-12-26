@@ -1,0 +1,97 @@
+{
+  "name": "DirectorMV v1 - Dual Person MV",
+  "description": "Dual character MV with storyboard scheduling",
+  "version": "0.1.0",
+  "nodes": {
+    "description": "This is a workflow template. Load in ComfyUI to use.",
+    "flow": [
+      {
+        "step": 1,
+        "nodes": ["LoadImage (Character A)", "LoadImage (Character B)"],
+        "description": "Load both character reference images"
+      },
+      {
+        "step": 2,
+        "nodes": ["PuLID A", "PuLID B"],
+        "description": "Extract identity embeddings for both characters"
+      },
+      {
+        "step": 3,
+        "nodes": ["DMV_IdentityExtractor A", "DMV_IdentityExtractor B"],
+        "description": "Extract ArcFace embeddings for validation"
+      },
+      {
+        "step": 4,
+        "nodes": ["DMV_IdentityCache A", "DMV_IdentityCache B"],
+        "description": "Cache both identities"
+      },
+      {
+        "step": 5,
+        "node": "DMV_StoryboardParser",
+        "description": "Parse storyboard script"
+      },
+      {
+        "step": 6,
+        "node": "DMV_ShotScheduler",
+        "description": "Schedule shots for optimal generation"
+      },
+      {
+        "step": 7,
+        "node": "DMV_CharacterRouter",
+        "description": "Route to appropriate character pipeline per shot"
+      },
+      {
+        "step": 8,
+        "node": "Kling Dual Character (existing)",
+        "description": "Generate dual-character scenes via Kling API",
+        "condition": "For same_frame layouts"
+      },
+      {
+        "step": 9,
+        "node": "Kling Image2Video (existing)",
+        "description": "Generate single-character scenes",
+        "condition": "For single_A or single_B layouts"
+      },
+      {
+        "step": 10,
+        "node": "DMV_QualityGate",
+        "description": "Validate identity for each shot"
+      },
+      {
+        "step": 11,
+        "node": "DMV_VideoComposer",
+        "description": "Compose all shots into final video"
+      },
+      {
+        "step": 12,
+        "node": "Kling LipSync (existing)",
+        "description": "Apply lip sync if audio provided"
+      },
+      {
+        "step": 13,
+        "node": "SaveVideo",
+        "description": "Save final MV output"
+      }
+    ]
+  },
+  "required_nodes": [
+    "PuLID_ComfyUI",
+    "comfy_api_nodes (Kling)",
+    "ComfyUI-VideoHelperSuite"
+  ],
+  "dmv_nodes_used": [
+    "DMV_IdentityExtractor",
+    "DMV_IdentityCache",
+    "DMV_StoryboardParser",
+    "DMV_ShotScheduler",
+    "DMV_CharacterRouter",
+    "DMV_VideoComposer",
+    "DMV_QualityGate"
+  ],
+  "acceptance_criteria": {
+    "identity_arcface_score": ">=0.6 both characters",
+    "dual_scene_success_rate": ">=70%",
+    "total_duration": "10-30s"
+  }
+}
+

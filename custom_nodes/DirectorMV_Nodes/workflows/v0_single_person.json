@@ -1,0 +1,76 @@
+{
+  "name": "DirectorMV v0 - Single Person MV",
+  "description": "Minimal viable workflow: single person video with lip sync",
+  "version": "0.1.0",
+  "nodes": {
+    "description": "This is a workflow template. Load in ComfyUI to use.",
+    "flow": [
+      {
+        "step": 1,
+        "node": "LoadImage",
+        "description": "Load reference character image"
+      },
+      {
+        "step": 2,
+        "node": "PuLID (existing)",
+        "description": "Extract identity embedding via PuLID node"
+      },
+      {
+        "step": 3,
+        "node": "DMV_IdentityExtractor",
+        "description": "Extract ArcFace embedding for validation"
+      },
+      {
+        "step": 4,
+        "node": "DMV_IdentityCache",
+        "description": "Cache identity for consistent generation"
+      },
+      {
+        "step": 5,
+        "node": "DMV_VideoRouter",
+        "description": "Determine video generation strategy"
+      },
+      {
+        "step": 6,
+        "node": "Kling Image2Video (existing)",
+        "description": "Generate video from image via Kling API"
+      },
+      {
+        "step": 7,
+        "node": "DMV_QualityGate",
+        "description": "Validate identity preservation in output"
+      },
+      {
+        "step": 8,
+        "node": "LoadAudio",
+        "description": "Load audio for lip sync"
+      },
+      {
+        "step": 9,
+        "node": "Kling LipSync (existing)",
+        "description": "Apply lip sync via Kling API"
+      },
+      {
+        "step": 10,
+        "node": "SaveVideo",
+        "description": "Save final output"
+      }
+    ]
+  },
+  "required_nodes": [
+    "PuLID_ComfyUI",
+    "comfy_api_nodes (Kling)"
+  ],
+  "dmv_nodes_used": [
+    "DMV_IdentityExtractor",
+    "DMV_IdentityCache",
+    "DMV_VideoRouter",
+    "DMV_QualityGate"
+  ],
+  "acceptance_criteria": {
+    "identity_arcface_score": ">=0.6",
+    "lip_sync_delay": "<=80ms",
+    "video_duration": "5s"
+  }
+}
+
