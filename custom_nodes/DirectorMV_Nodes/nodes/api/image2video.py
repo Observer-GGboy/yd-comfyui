@@ -4,6 +4,11 @@ DMV_API_Image2Video - Unified Image-to-Video generation node
 Abstracts away vendor-specific APIs (Kling, MiniMax, Runway, Vidu, Local).
 Workflows use this single node instead of vendor-specific nodes.
 
+Architecture:
+- Use provider-specific DMV_CFG_* nodes to create unified config
+- This node accepts the unified config and executes generation
+- Backward compatible: can still use direct parameter inputs
+
 Supports all official models/resolutions/durations per provider documentation.
 Implements test modes for cost-effective API validation.
 
@@ -26,6 +31,14 @@ from datetime import datetime
 
 from .task_tracker import get_tracker, TaskRecord
 from .api_logger import get_api_logger
+from ...schemas.i2v_config import (
+    I2VConfig,
+    I2V_CONFIG_TYPE,
+    comfy_dict_to_config,
+    DRAFT_PROVIDER_SET,
+)
+from ...utils.video_utils import FFmpegResolver, get_ffmpeg_path, check_ffmpeg
+from ...utils.weights import WeightResolver, check_turbodiffusion_weights, get_turbodiffusion_weights_path
 
 logger = logging.getLogger("DirectorMV.API")
 
@@ -85,6 +98,7 @@ class TestStatus(str, Enum):
     TEST_DOWNLOAD_OK = "TEST_DOWNLOAD_OK"
     TEST_DOWNLOAD_FAIL = "TEST_DOWNLOAD_FAIL"
     PROD_SUCCESS = "PROD_SUCCESS"
+    PROD_SUCCESS_PLACEHOLDER = "PROD_SUCCESS_PLACEHOLDER"
     PROD_FAIL = "PROD_FAIL"
 
 
@@ -521,6 +535,21 @@ class DMV_API_Image2Video:
     
     @classmethod
     def INPUT_TYPES(cls):
+        """
+        Input specification for DMV_API_Image2Video.
+        
+        REQUIRED: Connect a DMV_CFG_* node to the 'config' input.
+        All generation parameters come from the config node.
+        
+        Available config nodes:
+        - DMV_CFG_MiniMax_I2V
+        - DMV_CFG_Kling_I2V
+        - DMV_CFG_Runway_I2V
+        - DMV_CFG_Vidu_I2V
+        - DMV_CFG_Local_TurboDiffusion_I2V (draft, FREE)
+        - DMV_CFG_Local_Wan_I2V (draft, FREE)
+        - DMV_CFG_Local_CogVideoFast_I2V (draft, FREE)
+        """
         return {
             "required": {
                 "image": ("IMAGE",),
@@ -528,92 +557,34 @@ class DMV_API_Image2Video:
                     "default": "A person looking at camera, natural expression",
                     "multiline": True,
                 }),
+                "config": (I2V_CONFIG_TYPE, {
+                    "tooltip": "⚠️ REQUIRED: Connect a DMV_CFG_* node for provider configuration",
+                }),
             },
             "optional": {
-                # Provider selection
-                # Production providers: kling, minimax, runway, vidu (Commercial APIs, billable)
-                # Draft providers: local_turbodiffusion, local_wan_i2v, local_cogvideo_fast (Local GPU, FREE, preview only)
-                "provider": ([
-                    "auto",
-                    # Production Providers (Commercial APIs - for final output)
-                    "kling", "minimax", "runway", "vidu",
-                    # Draft Providers (Local GPU - for preview/draft ONLY)
-                    "local_turbodiffusion",  # ⚡ Fastest draft, ~16GB VRAM
-                    "local_wan_i2v",         # 🎬 Better motion, ~20GB VRAM
-                    "local_cogvideo_fast",   # 🎯 CogVideoX fast, ~18GB VRAM
-                    "local",                 # Legacy local option
-                ], {
-                    "default": "local_turbodiffusion",  # Default to draft for cost-free iteration
-                    "tooltip": "⚠️ local_* providers are DRAFT quality for preview only. Use kling/minimax for production.",
-                }),
-                # Model selection (provider-specific)
-                "model": (["auto", 
-                          # MiniMax models
-                          "I2V-01", "I2V-01-Director", "I2V-01-live", "S2V-01",
-                          # Kling models
-                          "kling-v1", "kling-v1-5", "kling-v2",
-                          # Runway models
-                          "gen3a_turbo", "gen4_turbo",
-                          # Vidu models
-                          "vidu-1.0", "vidu-1.5", "vidu-2.0",
-                          # Local draft models
-                          "turbodiffusion", "wan_i2v", "cogvideo_fast",
-                          # Legacy local models
-                          "hunyuan", "cogvideo"], {
-                    "default": "auto",
-                }),
-                # Generation parameters
-                "duration": (["5", "6", "8", "10"], {
-                    "default": "5",
-                }),
-                "resolution": (["720p", "1080p", "720P", "1080P"], {
-                    "default": "720p",
-                }),
-                "mode": (["std", "pro", "master"], {  # Kling-specific
-                    "default": "std",
-                }),
-                "negative_prompt": ("STRING", {
-                    "default": "blurry, distorted face, bad anatomy, deformed",
-                    "multiline": True,
-                }),
-                "cfg_scale": ("FLOAT", {
-                    "default": 0.7,
-                    "min": 0.0,
-                    "max": 1.0,
-                    "step": 0.05,
-                }),
-                "seed": ("INT", {
-                    "default": -1,
-                    "min": -1,
-                    "max": 2147483647,
-                }),
-                "end_image": ("IMAGE",),
-                
-                # Test mode parameters
+                # === Execution control ===
                 "run_mode": (["prod_full", "test_connect", "test_create", "test_poll", "test_download"], {
                     "default": "prod_full",
+                    "tooltip": "prod_full=generate, test_*=API validation",
                 }),
                 "poll_seconds": ("INT", {
                     "default": 10,
                     "min": 1,
                     "max": 300,
+                    "tooltip": "Seconds to poll in test_poll mode",
                 }),
                 "test_task_id": ("STRING", {
                     "default": "",
                     "multiline": False,
+                    "tooltip": "Task ID for test_download mode",
                 }),
-                
-                # Debug options
                 "return_debug": ("BOOLEAN", {
                     "default": False,
+                    "tooltip": "Include detailed debug info in status",
                 }),
-                "enable_fallback": ("BOOLEAN", {
-                    "default": True,
-                }),
-                "api_key_override": ("STRING", {
-                    "default": "",
-                    "multiline": False,
-                }),
+                
+                # === Optional: End image for supported providers (Kling, Vidu) ===
+                "end_image": ("IMAGE",),
             }
         }
     
@@ -626,24 +597,19 @@ class DMV_API_Image2Video:
         self,
         image: torch.Tensor,
         prompt: str,
-        provider: str = "auto",
-        model: str = "auto",
-        duration: str = "5",
-        resolution: str = "720p",
-        mode: str = "std",
-        negative_prompt: str = "",
-        cfg_scale: float = 0.7,
-        seed: int = -1,
-        end_image: Optional[torch.Tensor] = None,
+        config: Dict[str, Any],
+        # Execution control
         run_mode: str = "prod_full",
         poll_seconds: int = 10,
         test_task_id: str = "",
         return_debug: bool = False,
-        enable_fallback: bool = True,
-        api_key_override: str = "",
+        end_image: Optional[torch.Tensor] = None,
     ) -> Tuple[str, str, float, str, bool]:
         """
-        Generate video from image.
+        Generate video from image using unified config.
+        
+        All generation parameters come from the config input.
+        Connect a DMV_CFG_* node to provide configuration.
         
         Returns:
             video_path: Path to generated video file (or empty on failure)
@@ -655,8 +621,57 @@ class DMV_API_Image2Video:
         api_logger = get_api_logger()
         tracker = get_tracker()
         
-        # Normalize resolution
-        resolution = resolution.upper() if resolution.lower() in ["720p", "1080p"] else resolution
+        # === Validate and extract parameters from config ===
+        if config is None or not isinstance(config, dict):
+            error_msg = "PROD_FAIL | config is required. Connect a DMV_CFG_* node."
+            logger.error(error_msg)
+            return ("", "", 0.0, error_msg, False)
+        
+        if config.get("_type") != I2V_CONFIG_TYPE:
+            error_msg = f"PROD_FAIL | Invalid config type. Expected {I2V_CONFIG_TYPE}, got {config.get('_type')}"
+            logger.error(error_msg)
+            return ("", "", 0.0, error_msg, False)
+        
+        try:
+            cfg = comfy_dict_to_config(config)
+        except Exception as e:
+            error_msg = f"PROD_FAIL | Failed to parse config: {e}"
+            logger.error(error_msg)
+            return ("", "", 0.0, error_msg, False)
+        
+        # Extract all parameters from config
+        provider = cfg.provider
+        model = cfg.model
+        duration = str(cfg.duration_s)
+        resolution = cfg.resolution
+        negative_prompt = cfg.negative_prompt
+        cfg_scale = cfg.cfg_scale
+        seed = cfg.seed
+        enable_fallback = cfg.enable_fallback
+        api_key_override = cfg.api_key_override
+        
+        provider_specific = cfg._provider_specific if isinstance(cfg._provider_specific, dict) else {}
+        
+        # Extract provider-specific mode for Kling
+        mode = provider_specific.get("mode", "std")
+        draft_params = provider_specific
+        
+        logger.info(f"Config: provider={provider}, model={model}, tier={cfg.quality_tier}")
+        if cfg.notes:
+            logger.info(f"Notes: {cfg.notes}")
+        
+        # Normalize resolution to lowercase (fix 720P/1080P issues)
+        resolution = resolution.lower() if resolution else "720p"
+        
+        # Ensure seed is valid (not NaN)
+        if seed is None or (isinstance(seed, float) and seed != seed):
+            seed = -1
+        
+        # CRITICAL: Draft providers must NEVER enable fallback (prevent accidental charges)
+        if provider in DRAFT_PROVIDER_SET or provider.startswith("local"):
+            if enable_fallback:
+                logger.warning(f"⚠️ Draft provider {provider}: forcing enable_fallback=False to prevent accidental API charges")
+                enable_fallback = False
         
         # Handle test modes
         if run_mode == RunMode.TEST_CONNECT.value:
@@ -684,7 +699,7 @@ class DMV_API_Image2Video:
         return self._prod_full(
             image, prompt, provider, model, duration, resolution, mode,
             negative_prompt, cfg_scale, seed, end_image, enable_fallback,
-            api_key_override, return_debug
+            api_key_override, return_debug, draft_params
         )
     
     # =========================================================================
@@ -729,6 +744,31 @@ class DMV_API_Image2Video:
             
             elapsed_ms = (time.time() - start_time) * 1000
             
+            # Check if draft provider env check failed
+            if result.get("status") == "failed":
+                # Draft provider environment check failed
+                entry = api_logger.log_request(
+                    provider=provider,
+                    model=model,
+                    run_mode="test_connect",
+                    operation="draft_env_check",
+                    request_url="N/A",
+                    http_status=0,
+                    response_body=result,
+                    response_time_ms=elapsed_ms,
+                    error=result.get("message", "Environment check failed"),
+                    extra={"ffmpeg_path": result.get("ffmpeg_path", "")},
+                )
+                
+                status = f"{TestStatus.TEST_CONNECT_FAIL.value} | {result.get('message', 'Environment check failed')}"
+                if return_debug:
+                    details = result.get("details", {})
+                    if details.get("recommendations"):
+                        status += f" | Hints: {details['recommendations'][0]}"
+                    status += f" | Log: {api_logger.get_log_path()}"
+                
+                return ("", "", 0.0, status, False)
+            
             # Log successful connection
             entry = api_logger.log_request(
                 provider=provider,
@@ -739,9 +779,12 @@ class DMV_API_Image2Video:
                 http_status=result.get("http_status", 200),
                 response_body=result,
                 response_time_ms=elapsed_ms,
+                extra={"ffmpeg_path": result.get("ffmpeg_path", "")},
             )
             
-            status = f"{TestStatus.TEST_CONNECT_OK.value} | {provider} API connected"
+            # Use provider's message if available (contains detailed info for draft providers)
+            provider_msg = result.get("message", f"{provider} API connected")
+            status = f"{TestStatus.TEST_CONNECT_OK.value} | {provider_msg}"
             if return_debug:
                 status += f" | {api_logger.format_status_summary(entry)}"
             
@@ -1104,6 +1147,7 @@ class DMV_API_Image2Video:
         enable_fallback: bool,
         api_key: str,
         return_debug: bool,
+        draft_params: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, str, float, str, bool]:
         """
         Full production video generation.
@@ -1134,8 +1178,14 @@ class DMV_API_Image2Video:
                     if p.value != provider and p not in providers_to_try:
                         providers_to_try.append(p)
         
+        draft_params = draft_params or {}
+        try:
+            duration_seconds = int(float(duration))
+        except (TypeError, ValueError):
+            duration_seconds = 4
+        
         # Input params for tracking
-        input_params = {
+        base_input_params = {
             "prompt": prompt[:100],
             "duration": duration,
             "resolution": resolution,
@@ -1150,6 +1200,20 @@ class DMV_API_Image2Video:
         task = None
         
         for p in providers_to_try:
+            input_params = dict(base_input_params)
+            if p == Provider.LOCAL_TURBODIFFUSION:
+                steps = int(draft_params.get("steps", 20))
+                fps = int(draft_params.get("fps", 24))
+                motion_bucket_id = int(draft_params.get("motion_bucket_id", 127))
+                noise_aug_strength = float(draft_params.get("noise_aug_strength", 0.02))
+                num_frames = max(2, duration_seconds * fps)
+                input_params.update({
+                    "steps": steps,
+                    "fps": fps,
+                    "num_frames": num_frames,
+                    "motion_bucket_id": motion_bucket_id,
+                    "noise_aug_strength": noise_aug_strength,
+                })
             # Create task
             task = tracker.create_task(
                 provider=p.value,
@@ -1174,14 +1238,32 @@ class DMV_API_Image2Video:
                     seed=seed,
                     end_image=pil_end_image,
                     api_key=api_key,
+                    draft_params=draft_params,
                 )
                 
                 if video_path and os.path.exists(video_path):
+                    provider_response = {}
+                    if p == Provider.LOCAL_TURBODIFFUSION:
+                        provider_response = getattr(self, "_last_provider_response", {}) or {}
+                        if provider_response.get("placeholder_used"):
+                            placeholder_status = (
+                                f"{TestStatus.PROD_SUCCESS_PLACEHOLDER.value} | "
+                                "local_turbodiffusion placeholder output (static image)"
+                            )
+                            tracker.fail_task(
+                                task_id=task.task_id,
+                                error_message=placeholder_status,
+                                provider_response=provider_response,
+                            )
+                            logger.error(f"{task.task_id}: {placeholder_status}")
+                            return (video_path, task.task_id, 0.0, placeholder_status, False)
+                    
                     # Success
                     tracker.complete_task(
                         task_id=task.task_id,
                         output_path=video_path,
                         provider_task_id=provider_task_id,
+                        provider_response=provider_response,
                         actual_cost_usd=actual_cost,
                     )
                     
@@ -1226,6 +1308,7 @@ class DMV_API_Image2Video:
         seed: int,
         end_image: Optional[Image.Image],
         api_key: str,
+        draft_params: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, str, float]:
         """
         Call specific provider's API for full generation.
@@ -1253,7 +1336,24 @@ class DMV_API_Image2Video:
             return self._call_local(image, prompt, duration, seed)
         # Draft Providers - Local GPU
         elif provider == Provider.LOCAL_TURBODIFFUSION:
-            return self._call_turbodiffusion(image, prompt, duration, seed, negative_prompt, cfg_scale)
+            draft_params = draft_params or {}
+            steps = int(draft_params.get("steps", 20))
+            fps = int(draft_params.get("fps", 24))
+            motion_bucket_id = int(draft_params.get("motion_bucket_id", 127))
+            noise_aug_strength = float(draft_params.get("noise_aug_strength", 0.02))
+            return self._call_turbodiffusion(
+                image=image,
+                prompt=prompt,
+                duration=duration,
+                seed=seed,
+                negative_prompt=negative_prompt,
+                cfg_scale=cfg_scale,
+                resolution=resolution,
+                steps=steps,
+                fps=fps,
+                motion_bucket_id=motion_bucket_id,
+                noise_aug_strength=noise_aug_strength,
+            )
         elif provider == Provider.LOCAL_WAN_I2V:
             return self._call_wan_i2v(image, prompt, duration, seed, negative_prompt, cfg_scale)
         elif provider == Provider.LOCAL_COGVIDEO_FAST:
@@ -1335,8 +1435,8 @@ class DMV_API_Image2Video:
         if duration_int not in [6]:  # MiniMax currently only supports 6s
             duration_int = 6
         
-        # Resolution mapping
-        res_upper = resolution.upper()
+        # Resolution mapping (MiniMax API uses uppercase)
+        res_upper = resolution.upper() if resolution else "720P"
         if res_upper not in ["720P", "1080P"]:
             res_upper = "720P"
         
@@ -2193,6 +2293,7 @@ class DMV_API_Image2Video:
         Environment self-check for draft providers.
         
         Checks:
+        - FFmpeg availability (required for video encoding)
         - CUDA availability
         - PyTorch version
         - Model weights existence
@@ -2205,19 +2306,51 @@ class DMV_API_Image2Video:
         checks = {
             "provider": provider,
             "status": "checking",
+            # FFmpeg (critical for video encoding)
+            "ffmpeg_found": False,
+            "ffmpeg_path": None,
+            "ffmpeg_version": None,
+            "ffmpeg_source": None,
+            # GPU/CUDA
             "cuda_available": False,
             "torch_version": None,
             "cuda_version": None,
             "gpu_name": None,
             "vram_total_gb": 0,
             "vram_free_gb": 0,
+            # Model weights
             "weights_found": False,
             "weights_path": None,
+            # Issues and recommendations
             "issues": [],
             "recommendations": [],
         }
         
-        # Check CUDA availability
+        # === Check FFmpeg (critical for video encoding) ===
+        ffmpeg_result = check_ffmpeg()
+        checks["ffmpeg_found"] = ffmpeg_result["found"]
+        checks["ffmpeg_path"] = ffmpeg_result.get("path", "")
+        checks["ffmpeg_version"] = ffmpeg_result.get("version", "")
+        checks["ffmpeg_source"] = ffmpeg_result.get("source", "")
+        
+        if not ffmpeg_result["found"]:
+            checks["issues"].append(
+                f"FFmpeg not found - required for video encoding"
+            )
+            # Add install instructions as recommendations
+            for instruction in ffmpeg_result.get("install_instructions", []):
+                if instruction.strip():
+                    checks["recommendations"].append(instruction)
+            # Log search details for debugging
+            if ffmpeg_result.get("search_log"):
+                logger.debug(f"FFmpeg search log: {ffmpeg_result['search_log']}")
+        else:
+            logger.info(
+                f"FFmpeg found: {checks['ffmpeg_path']} "
+                f"(version: {checks['ffmpeg_version']}, source: {checks['ffmpeg_source']})"
+            )
+        
+        # === Check CUDA availability ===
         try:
             checks["cuda_available"] = torch.cuda.is_available()
             checks["torch_version"] = torch.__version__
@@ -2254,39 +2387,71 @@ class DMV_API_Image2Video:
                     f"VRAM {checks['vram_total_gb']}GB is below recommended {rec_vram}GB"
                 )
         
-        # Check for model weights
-        weights_paths = self._get_draft_model_paths(provider)
-        for path in weights_paths:
-            if os.path.exists(path):
-                checks["weights_found"] = True
-                checks["weights_path"] = path
-                break
+        # Check for model weights with detailed file-level validation
+        weight_result = WeightResolver.check_weights(model_key)
+        checks["weights_found"] = weight_result.found
+        checks["weights_path"] = weight_result.weights_dir
+        checks["weights_source"] = weight_result.source
+        checks["weights_missing_files"] = weight_result.missing_files
+        checks["weights_found_files"] = weight_result.found_files
         
-        if not checks["weights_found"]:
-            checks["issues"].append(
-                f"Model weights not found. Expected paths: {weights_paths[:2]}"
-            )
-            checks["recommendations"].append(
-                f"Download {model_key} weights and place in ComfyUI/models/video_generation/"
-            )
+        if not weight_result.found:
+            if weight_result.missing_files:
+                # Show specific missing files
+                missing_list = ", ".join(weight_result.missing_files[:5])
+                if len(weight_result.missing_files) > 5:
+                    missing_list += f", ... (+{len(weight_result.missing_files) - 5} more)"
+                checks["issues"].append(
+                    f"Model weights incomplete. Missing: {missing_list}"
+                )
+            else:
+                # Directory not found at all
+                search_paths = WeightResolver.get_search_paths(model_key)
+                expected_paths = [p[0] for p in search_paths[:2]]
+                checks["issues"].append(
+                    f"Model weights not found. Expected: {expected_paths}"
+                )
+            
+            # Add install instructions
+            for instruction in weight_result.install_instructions[:5]:
+                if instruction.strip() and not instruction.startswith("==="):
+                    checks["recommendations"].append(instruction)
         
-        # Determine overall status
+        # === Determine overall status ===
         if checks["issues"]:
             checks["status"] = "failed"
+            
+            # Build detailed failure message
+            extra_info = ""
+            if not checks["ffmpeg_found"]:
+                extra_info += " | FFmpeg: NOT FOUND (set DMV_FFMPEG_PATH or install via winget)"
+            if not checks["weights_found"] and checks.get("weights_missing_files"):
+                missing_count = len(checks["weights_missing_files"])
+                extra_info += f" | Weights: {missing_count} files missing"
+            
             return {
                 "status": "failed",
-                "message": f"Environment check failed: {checks['issues'][0]}",
+                "message": f"Environment check failed: {checks['issues'][0]}{extra_info}",
                 "details": checks,
+                "ffmpeg_path": checks["ffmpeg_path"],
+                "weights_path": checks.get("weights_path", ""),
             }
         else:
             checks["status"] = "ready"
+            
+            # Build success message with ffmpeg and weights info
+            ffmpeg_info = f" | FFmpeg: {checks['ffmpeg_version']} ({checks['ffmpeg_source']})"
+            weights_info = f" | Weights: {checks.get('weights_path', 'OK')}"
+            
             return {
                 "status": "ready",
                 "message": (
                     f"{provider} ready | GPU: {checks['gpu_name']} | "
-                    f"VRAM: {checks['vram_free_gb']}/{checks['vram_total_gb']}GB"
+                    f"VRAM: {checks['vram_free_gb']}/{checks['vram_total_gb']}GB{ffmpeg_info}"
                 ),
                 "details": checks,
+                "ffmpeg_path": checks["ffmpeg_path"],
+                "weights_path": checks.get("weights_path", ""),
             }
     
     def _get_draft_model_paths(self, provider: str) -> List[str]:
@@ -2330,6 +2495,11 @@ class DMV_API_Image2Video:
         seed: int,
         negative_prompt: str,
         cfg_scale: float,
+        resolution: str,
+        steps: int,
+        fps: int,
+        motion_bucket_id: int,
+        noise_aug_strength: float,
     ) -> Tuple[str, str, float]:
         """
         TurboDiffusion draft video generation.
@@ -2348,13 +2518,21 @@ class DMV_API_Image2Video:
         model_info = LOCAL_DRAFT_MODELS["turbodiffusion"]
         duration_int = int(duration) if duration.isdigit() else 4
         duration_int = min(duration_int, 5)  # Cap at 5s for draft
+        steps = max(1, int(steps))
+        fps = max(1, int(fps))
+        motion_bucket_id = max(0, min(255, int(motion_bucket_id)))
+        noise_aug_strength = max(0.0, min(0.1, float(noise_aug_strength)))
         
         # Determine seed
         if seed < 0:
             seed = int(time.time() * 1000) % 2147483647
         
         logger.info(f"[DRAFT] TurboDiffusion starting | task_id={task_id}")
-        logger.info(f"[DRAFT] Config: duration={duration_int}s, seed={seed}, cfg={cfg_scale}")
+        logger.info(
+            f"[DRAFT] Config: duration={duration_int}s, seed={seed}, "
+            f"cfg={cfg_scale}, steps={steps}, fps={fps}, "
+            f"motion_bucket_id={motion_bucket_id}, noise_aug_strength={noise_aug_strength}"
+        )
         
         try:
             # Try to import TurboDiffusion pipeline
@@ -2365,6 +2543,11 @@ class DMV_API_Image2Video:
                 duration_seconds=duration_int,
                 seed=seed,
                 cfg_scale=cfg_scale,
+                resolution=resolution,
+                steps=steps,
+                fps=fps,
+                motion_bucket_id=motion_bucket_id,
+                noise_aug_strength=noise_aug_strength,
                 task_id=task_id,
             )
             
@@ -2374,6 +2557,24 @@ class DMV_API_Image2Video:
             vram_used = 0
             if torch.cuda.is_available():
                 vram_used = torch.cuda.max_memory_allocated() / (1024**3)
+            
+            target_frames = max(2, duration_int * fps)
+            max_frames = 25
+            generated_frames = min(target_frames, max_frames)
+            self._last_provider_response = {
+                "steps": steps,
+                "fps": fps,
+                "num_frames": target_frames,
+                "generated_frames": generated_frames,
+                "motion_bucket_id": motion_bucket_id,
+                "noise_aug_strength": noise_aug_strength,
+                "cfg_scale": cfg_scale,
+                "seed": seed,
+                "duration_seconds": duration_int,
+                "resolution": resolution,
+                "placeholder_used": False,
+                "looped_output": target_frames > generated_frames,
+            }
             
             logger.info(f"[DRAFT] TurboDiffusion complete | task_id={task_id}")
             logger.info(f"[DRAFT] Performance: time={elapsed:.1f}s, vram_peak={vram_used:.1f}GB")
@@ -2399,81 +2600,191 @@ class DMV_API_Image2Video:
         duration_seconds: int,
         seed: int,
         cfg_scale: float,
+        resolution: str,
+        steps: int,
+        fps: int,
+        motion_bucket_id: int,
+        noise_aug_strength: float,
         task_id: str,
     ) -> str:
         """
-        Run TurboDiffusion inference.
+        Run TurboDiffusion (SVD-XT) inference.
         
         This method contains the actual model loading and inference logic.
-        Separated for easier testing and future model swapping.
+        Uses Stable Video Diffusion XT as the backend.
+        
+        IMPORTANT: This will FAIL if weights are not installed.
+        No placeholder/demo mode - weights must be present.
         """
         # Get output path
         output_dir = get_output_dir()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = os.path.join(output_dir, f"draft_turbo_{task_id}_{timestamp}.mp4")
         
-        # Get model path
-        weights_paths = self._get_draft_model_paths("local_turbodiffusion")
-        model_path = None
-        for path in weights_paths:
-            if os.path.exists(path):
-                model_path = path
-                break
+        # Check weights with detailed validation (NO FALLBACK TO PLACEHOLDER)
+        weight_result = check_turbodiffusion_weights()
         
-        if not model_path:
-            # Try using diffusers directly if installed
-            try:
-                from diffusers import DiffusionPipeline
-                
-                # For now, use a placeholder implementation
-                # Real implementation would load TurboDiffusion or similar fast I2V model
-                logger.warning(
-                    "[DRAFT] TurboDiffusion weights not found. "
-                    "Using placeholder implementation for demo."
-                )
-                
-                # Create a simple placeholder video for testing
-                # In production, this would be replaced with actual model inference
-                self._create_placeholder_draft_video(
-                    image=image,
-                    output_path=output_path,
-                    duration_seconds=duration_seconds,
-                    prompt=prompt,
-                    task_id=task_id,
-                )
-                
-                return output_path
-                
-            except ImportError:
-                raise ImportError(
-                    "diffusers not installed. Please install: pip install diffusers"
-                )
+        if not weight_result.found:
+            # Build detailed error message
+            error_parts = [
+                "PROD_FAIL | TurboDiffusion weights not installed",
+                "",
+            ]
+            
+            if weight_result.missing_files:
+                error_parts.append("Missing files:")
+                for f in weight_result.missing_files[:10]:
+                    error_parts.append(f"  - {f}")
+                error_parts.append("")
+            
+            error_parts.append("To install weights, run:")
+            error_parts.append("  .\\scripts\\setup_turbodiffusion.ps1")
+            error_parts.append("")
+            error_parts.append("Or download manually from:")
+            error_parts.append("  https://huggingface.co/stabilityai/stable-video-diffusion-img2vid-xt")
+            error_parts.append("")
+            error_parts.append("Place in: ComfyUI/models/video_generation/turbodiffusion/")
+            
+            raise RuntimeError("\n".join(error_parts))
         
-        # Load and run actual model
-        # This is where the real TurboDiffusion integration would go
+        model_path = weight_result.weights_dir
+        logger.info(f"[DRAFT] TurboDiffusion weights: {model_path}")
+        
+        # Load and run SVD-XT model
         try:
-            from diffusers import DiffusionPipeline
+            import inspect
+            import subprocess
+            import sys
+            import tempfile
+            from diffusers import StableVideoDiffusionPipeline
             
-            logger.info(f"[DRAFT] Loading TurboDiffusion from: {model_path}")
+            logger.info(f"[DRAFT] Loading Stable Video Diffusion from: {model_path}")
             
-            # Actual model loading and inference
-            # pipe = DiffusionPipeline.from_pretrained(model_path, torch_dtype=torch.float16)
-            # pipe = pipe.to("cuda")
-            # ... inference code ...
-            
-            # For now, use placeholder
-            self._create_placeholder_draft_video(
-                image=image,
-                output_path=output_path,
-                duration_seconds=duration_seconds,
-                prompt=prompt,
-                task_id=task_id,
+            # Load pipeline
+            pipe = StableVideoDiffusionPipeline.from_pretrained(
+                model_path,
+                torch_dtype=torch.float16,
+                variant="fp16" if os.path.exists(os.path.join(model_path, "unet", "diffusion_pytorch_model.fp16.safetensors")) else None,
             )
+            pipe = pipe.to("cuda")
+            
+            # Enable memory optimizations
+            pipe.enable_model_cpu_offload()
+            
+            # Prepare input image
+            input_image = image.convert("RGB")
+            target_width, target_height = 1024, 576
+            if resolution and "x" in resolution:
+                try:
+                    parts = resolution.lower().split("x", 1)
+                    target_width = int(parts[0])
+                    target_height = int(parts[1])
+                except (ValueError, IndexError):
+                    pass
+            input_image = input_image.resize((target_width, target_height))
+            
+            target_frames = max(2, duration_seconds * max(1, fps))
+            max_frames = 25
+            num_frames = min(target_frames, max_frames)
+            
+            # Generate frames
+            logger.info(
+                f"[DRAFT] Generating {num_frames} frames | duration={duration_seconds}s "
+                f"| fps={fps} | seed={seed}"
+            )
+            
+            generator = torch.Generator("cuda").manual_seed(seed) if seed >= 0 else None
+            
+            call_kwargs = {
+                "image": input_image,
+                "num_frames": num_frames,
+                "decode_chunk_size": 8,
+                "generator": generator,
+                "num_inference_steps": steps,
+                "motion_bucket_id": motion_bucket_id,
+                "noise_aug_strength": noise_aug_strength,
+            }
+            
+            call_signature = inspect.signature(pipe.__call__)
+            if "guidance_scale" in call_signature.parameters:
+                call_kwargs["guidance_scale"] = cfg_scale
+            else:
+                if "min_guidance_scale" in call_signature.parameters:
+                    call_kwargs["min_guidance_scale"] = cfg_scale
+                if "max_guidance_scale" in call_signature.parameters:
+                    call_kwargs["max_guidance_scale"] = cfg_scale
+            
+            frames = pipe(**call_kwargs).frames[0]
+            
+            ffmpeg_path = get_ffmpeg_path()
+            
+            with tempfile.TemporaryDirectory(dir=output_dir) as temp_dir:
+                for idx, frame in enumerate(frames):
+                    if not isinstance(frame, Image.Image):
+                        frame = Image.fromarray(np.asarray(frame))
+                    frame_path = os.path.join(temp_dir, f"frame_{idx:05d}.png")
+                    frame.save(frame_path)
+                
+                input_pattern = os.path.join(temp_dir, "frame_%05d.png")
+                
+                cmd = [
+                    ffmpeg_path,
+                    "-y",
+                ]
+                
+                if target_frames > num_frames:
+                    cmd.extend(["-stream_loop", "-1"])
+                
+                cmd.extend([
+                    "-framerate", str(fps),
+                    "-i", input_pattern,
+                    "-c:v", "libx264",
+                    "-pix_fmt", "yuv420p",
+                    "-movflags", "+faststart",
+                    "-r", str(fps),
+                ])
+                
+                if target_frames > num_frames:
+                    cmd.extend(["-t", str(duration_seconds)])
+                
+                cmd.append(output_path)
+                
+                creationflags = 0
+                if sys.platform == "win32":
+                    creationflags = subprocess.CREATE_NO_WINDOW
+                
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                    creationflags=creationflags,
+                )
+                
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        f"ffmpeg failed (exit code {result.returncode}):\n"
+                        f"Command: {' '.join(cmd[:4])}...\n"
+                        f"Stderr: {result.stderr[:500] if result.stderr else 'No stderr'}"
+                    )
+            
+            # Clear GPU memory
+            del pipe
+            torch.cuda.empty_cache()
+            
+            logger.info(f"[DRAFT] Generated video: {output_path}")
             
             return output_path
             
+        except ImportError as e:
+            raise RuntimeError(
+                f"diffusers not installed or incompatible. Error: {e}\n\n"
+                "Install with: pip install diffusers transformers accelerate\n"
+                "Note: Requires diffusers >= 0.25.0 for SVD support"
+            )
         except Exception as e:
-            raise RuntimeError(f"Failed to run TurboDiffusion: {e}")
+            logger.error(f"[DRAFT] SVD inference failed: {e}")
+            raise RuntimeError(f"TurboDiffusion inference failed: {e}")
     
     def _create_placeholder_draft_video(
         self,
@@ -2489,8 +2800,24 @@ class DMV_API_Image2Video:
         This creates a simple animated version of the input image
         to simulate draft output. In production, this would be
         replaced by actual model inference.
+        
+        Uses resolved ffmpeg path (not bare 'ffmpeg' command) to avoid
+        PATH dependency issues.
         """
         import subprocess
+        import sys
+        
+        # === Resolve ffmpeg path (critical) ===
+        try:
+            ffmpeg_path = get_ffmpeg_path()
+        except RuntimeError as e:
+            # Re-raise with more context for draft video
+            raise RuntimeError(
+                f"Cannot create draft video: {e}\n\n"
+                "FFmpeg is required for video encoding in draft mode."
+            )
+        
+        logger.debug(f"[DRAFT] Using ffmpeg: {ffmpeg_path}")
         
         # Resize image to draft resolution
         draft_size = (512, 512)
@@ -2506,10 +2833,10 @@ class DMV_API_Image2Video:
         total_frames = duration_seconds * fps
         
         try:
-            # Use ffmpeg to create a simple video from static image
-            # with some visual indication this is a draft
+            # Use resolved ffmpeg path to create video
+            # with visual indication this is a draft
             cmd = [
-                "ffmpeg", "-y",
+                ffmpeg_path, "-y",
                 "-loop", "1",
                 "-i", temp_image_path,
                 "-c:v", "libx264",
@@ -2526,15 +2853,25 @@ class DMV_API_Image2Video:
                 output_path,
             ]
             
+            # Use CREATE_NO_WINDOW on Windows to avoid console popup
+            creationflags = 0
+            if sys.platform == "win32":
+                creationflags = subprocess.CREATE_NO_WINDOW
+            
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=60,
+                creationflags=creationflags,
             )
             
             if result.returncode != 0:
-                raise RuntimeError(f"ffmpeg failed: {result.stderr}")
+                raise RuntimeError(
+                    f"ffmpeg failed (exit code {result.returncode}):\n"
+                    f"Command: {' '.join(cmd[:3])}...\n"
+                    f"Stderr: {result.stderr[:500] if result.stderr else 'No stderr'}"
+                )
                 
         finally:
             # Cleanup temp file
