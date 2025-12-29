@@ -73,8 +73,12 @@ class DMV_API_LipSync:
                 }),
             },
             "optional": {
-                "mode": (["audio", "text"],),
-                "provider": (["auto", "kling", "liveportrait"],),
+                "mode": (["audio", "text"], {
+                    "default": "audio",
+                }),
+                "provider": (["auto", "kling", "liveportrait"], {
+                    "default": "auto",
+                }),
                 "audio_path": ("STRING", {
                     "default": "",
                     "multiline": False,
@@ -83,8 +87,12 @@ class DMV_API_LipSync:
                     "default": "",
                     "multiline": True,
                 }),
-                "voice_preset": (["Melody", "Sunny", "Sage", "Ace", "Blossom"],),
-                "language": (["en", "zh"],),
+                "voice_preset": (["Melody", "Sunny", "Sage", "Ace", "Blossom"], {
+                    "default": "Melody",
+                }),
+                "language": (["en", "zh"], {
+                    "default": "en",
+                }),
                 "enable_fallback": ("BOOLEAN", {
                     "default": True,
                 }),

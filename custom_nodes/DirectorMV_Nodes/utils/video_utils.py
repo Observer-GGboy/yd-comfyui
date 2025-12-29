@@ -2,10 +2,167 @@
 Video utility functions for DirectorMV
 """
 
-from typing import Tuple, Dict, Any, Optional
+from typing import Tuple, Dict, Any, Optional, List
+import os
+import sys
+import shutil
+import subprocess
 import logging
 
 logger = logging.getLogger("DirectorMV.Utils")
+
+
+# =============================================================================
+# FFmpeg Resolver (Backward-Compatible)
+# =============================================================================
+
+class FFmpegResolver:
+    """
+    Resolve an FFmpeg executable path without relying on system env changes.
+    """
+
+    ENV_VAR = "DMV_FFMPEG_PATH"
+
+    def __init__(self) -> None:
+        self.search_log: List[str] = []
+
+    def resolve(self) -> Tuple[Optional[str], str]:
+        """
+        Resolve ffmpeg executable path.
+
+        Returns:
+            (path, source) where source is "env_var", "local", or "path".
+        """
+        # 1) Environment variable override
+        env_path = os.environ.get(self.ENV_VAR, "").strip()
+        if env_path:
+            candidate = self._normalize_candidate(env_path)
+            if candidate:
+                self.search_log.append(f"env_var:{candidate} (exists)")
+                return candidate, "env_var"
+            self.search_log.append(f"env_var:{env_path} (missing)")
+
+        # 2) Known local locations (relative to ComfyUI root)
+        for candidate in self._local_candidates():
+            if os.path.isfile(candidate):
+                self.search_log.append(f"local:{candidate} (exists)")
+                return candidate, "local"
+            self.search_log.append(f"local:{candidate} (missing)")
+
+        # 3) PATH lookup
+        which = shutil.which("ffmpeg")
+        if which:
+            self.search_log.append(f"path:{which} (found)")
+            return which, "path"
+        self.search_log.append("path:ffmpeg (not found)")
+
+        return None, ""
+
+    def _normalize_candidate(self, path_value: str) -> Optional[str]:
+        """Normalize env var input into a usable ffmpeg path."""
+        if not path_value:
+            return None
+
+        candidate = path_value
+        if os.path.isdir(candidate):
+            candidate = os.path.join(candidate, "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg")
+
+        if os.path.isfile(candidate):
+            return candidate
+        return None
+
+    def _local_candidates(self) -> List[str]:
+        """Candidate ffmpeg paths relative to ComfyUI root."""
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        director_nodes_dir = os.path.dirname(script_dir)
+        custom_nodes_dir = os.path.dirname(director_nodes_dir)
+        comfyui_dir = os.path.dirname(custom_nodes_dir)
+
+        exe_name = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
+        return [
+            os.path.join(comfyui_dir, "ffmpeg", exe_name),
+            os.path.join(comfyui_dir, "ffmpeg", "bin", exe_name),
+            os.path.join(comfyui_dir, "tools", "ffmpeg", "bin", exe_name),
+            os.path.join(comfyui_dir, "bin", exe_name),
+            os.path.join(comfyui_dir, exe_name),
+            os.path.join(director_nodes_dir, "ffmpeg", exe_name),
+        ]
+
+
+def _get_ffmpeg_version(ffmpeg_path: str) -> str:
+    """Return the ffmpeg version string, or empty string on failure."""
+    try:
+        result = subprocess.run(
+            [ffmpeg_path, "-version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+        if result.stdout:
+            return result.stdout.splitlines()[0].strip()
+    except Exception:
+        return ""
+    return ""
+
+
+def get_ffmpeg_path() -> str:
+    """
+    Get a usable ffmpeg path or raise a RuntimeError.
+    """
+    resolver = FFmpegResolver()
+    path, source = resolver.resolve()
+    if path:
+        return path
+
+    log_tail = "; ".join(resolver.search_log[-5:])
+    raise RuntimeError(
+        "FFmpeg not found. Set DMV_FFMPEG_PATH or install ffmpeg. "
+        f"Search log: {log_tail}"
+    )
+
+
+def check_ffmpeg() -> Dict[str, Any]:
+    """
+    Check FFmpeg availability and version.
+    """
+    resolver = FFmpegResolver()
+    path, source = resolver.resolve()
+    result: Dict[str, Any] = {
+        "found": False,
+        "path": "",
+        "version": "",
+        "source": "",
+        "error": "",
+        "install_instructions": [],
+        "search_log": resolver.search_log,
+    }
+
+    if path:
+        result["found"] = True
+        result["path"] = path
+        result["version"] = _get_ffmpeg_version(path)
+        result["source"] = source
+        return result
+
+    if sys.platform == "win32":
+        result["install_instructions"] = [
+            "Install via winget: winget install Gyan.FFmpeg",
+            "Or set DMV_FFMPEG_PATH to your ffmpeg.exe",
+        ]
+    elif sys.platform == "darwin":
+        result["install_instructions"] = [
+            "Install via brew: brew install ffmpeg",
+            "Or set DMV_FFMPEG_PATH to your ffmpeg binary",
+        ]
+    else:
+        result["install_instructions"] = [
+            "Install via package manager (e.g., sudo apt install ffmpeg)",
+            "Or set DMV_FFMPEG_PATH to your ffmpeg binary",
+        ]
+
+    result["error"] = "ffmpeg not found"
+    return result
 
 
 def estimate_duration(

@@ -17,6 +17,13 @@ from .attribute_transfer import (
     DMV_ExpressionTransfer,
     DMV_BackgroundTransfer,
 )
+from .portrait_pipeline import (
+    DMV_PreflightPortrait,
+    DMV_ApplyHairTransfer,
+    DMV_ApplyOutfitTransfer,
+    DMV_ExtractHairPatch,
+    DMV_VtonStatusText,
+)
 
 __all__ = [
     "DMV_AttributeTransfer",
@@ -24,5 +31,10 @@ __all__ = [
     "DMV_ClothingTransfer",
     "DMV_ExpressionTransfer",
     "DMV_BackgroundTransfer",
+    "DMV_PreflightPortrait",
+    "DMV_ApplyHairTransfer",
+    "DMV_ApplyOutfitTransfer",
+    "DMV_ExtractHairPatch",
+    "DMV_VtonStatusText",
 ]
 

@@ -127,3 +127,14 @@
 - [测试与成本矩阵 →](../api/test_cost_matrix.md)
 - [← 返回文档首页](../README.md)
 
+
+---
+
+## v2 Styling Castpack Safety (test_connect)
+
+- `v2_styling_castpack.json` shows `run_mode`, `select_index`, and a "Kling VTON executed?" status in UI.
+- If ImpactSwitch lazy bypass does not prevent Kling execution on older ComfyUI:
+  1) Duplicate `v2_styling_castpack.json`.
+  2) Disconnect `KlingVirtualTryOnNode` and `ImpactSwitch`.
+  3) Connect `DMV_ApplyOutfitTransfer.person_image` directly into the hair inpaint chain.
+  4) Keep `run_mode=test_connect` so logs record `vton_called=false`.
